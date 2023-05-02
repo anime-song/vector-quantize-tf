@@ -135,11 +135,11 @@ class ResidualVQ(tf.keras.layers.Layer):
             self,
             codebook_size,
             embedding_dim,
-            num_quantizers,
             batch_size,
-            ema_decay,
-            threshold_ema_dead_code,
-            commitment_cost,
+            num_quantizers,
+            ema_decay=0.99,
+            threshold_ema_dead_code=2,
+            commitment_cost=1.0,
             **kwargs):
         super().__init__(**kwargs)
         self.codebook_size = codebook_size
