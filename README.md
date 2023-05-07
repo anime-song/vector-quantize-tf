@@ -1,4 +1,6 @@
 # vector-quantize-tf
+[![PyPI](https://img.shields.io/pypi/v/vector-quantize-tf.svg)](https://pypi.org/project/vector-quantize-tf)
+
 残差ベクトル量子化のtensorflowの実装
 
 # インストール
