@@ -54,27 +54,30 @@ class VectorQuantizer(tf.keras.layers.Layer):
             return
         
         dead_codes = self.ema_cluster_size < self.threshold_ema_dead_code
+        indices_to_update = tf.where(dead_codes)
 
-        batch_samples = tf.reshape(batch_samples, (self.batch_size, -1, tf.shape(batch_samples)[-1]))
-        seq_len = tf.reduce_sum(tf.ones_like(batch_samples)[:, :, 0], axis=1)[0]
+        reshaped_samples = tf.reshape(batch_samples, (self.batch_size, -1, tf.shape(batch_samples)[-1]))
+        seq_len = tf.reduce_sum(tf.ones_like(reshaped_samples)[:, :, 0], axis=1)[0]
         seq_len = tf.cast(seq_len, tf.int32)
 
+        updated_embeddings = tf.transpose(self.embeddings)
         for i in range(self.batch_size):
-            samples = batch_samples[i]
+            samples = reshaped_samples[i]
             if seq_len >= self.codebook_size:
                 sampled_indices = tf.random.shuffle(tf.range(seq_len))[:self.codebook_size]
             else:
                 sampled_indices = tf.random.uniform((self.codebook_size,), minval=0, maxval=seq_len, dtype=tf.int32)
             sampled_vectors = tf.gather(samples, sampled_indices)
 
-            indices_to_update = tf.where(dead_codes)
             vectors_to_update = tf.gather(sampled_vectors, tf.range(tf.minimum(tf.shape(indices_to_update)[0], tf.shape(sampled_vectors)[0])))
-
-            # 更新
-            updated_embeddings = tf.transpose(self.embeddings)
             updated_embeddings = tf.tensor_scatter_nd_update(updated_embeddings, indices_to_update, vectors_to_update)
-            updated_embeddings = tf.transpose(updated_embeddings)
-            self.embeddings.assign(updated_embeddings)
+
+        updated_embeddings = tf.transpose(updated_embeddings)
+        self.embeddings.assign(updated_embeddings)
+
+        updated_ema_cluster_size = tf.where(dead_codes, tf.ones_like(self.ema_cluster_size) * self.threshold_ema_dead_code, self.ema_cluster_size)
+        self.ema_cluster_size.assign(updated_ema_cluster_size)
+        self.ema_w.assign(updated_embeddings * self.threshold_ema_dead_code)
 
     def call(self, inputs, training=False):
         flat_inputs = tf.reshape(inputs, [-1, self.embedding_dim])
