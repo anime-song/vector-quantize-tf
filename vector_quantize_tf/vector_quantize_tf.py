@@ -2,6 +2,49 @@ import tensorflow as tf
 from tensorflow.keras import backend as K
 
 
+class GumbelSoftmaxLayer(tf.keras.layers.Layer):
+    def __init__(
+            self,
+            initial_temperature=2.0,
+            anneal_factor=0.999995,
+            min_temperature=0.5,
+            **kwargs):
+        super(GumbelSoftmaxLayer, self).__init__(**kwargs)
+        self.initial_temperature = initial_temperature
+        self.anneal_factor = anneal_factor
+        self.min_temperature = min_temperature
+
+    def build(self, input_shape):
+        self.temperature = tf.Variable(self.initial_temperature, dtype=tf.float32, trainable=False, name="temperature")
+    
+    def call(self, inputs, training=False):
+        if self.temperature == 0 or not training:
+            return tf.argmax(inputs, axis=1)
+        
+        gumbel_noise = tf.random.uniform(shape=tf.shape(inputs), minval=0, maxval=1, dtype=tf.float32)
+        gumbel_noise = -tf.math.log(-tf.math.log(gumbel_noise))
+
+        outputs = tf.argmax(tf.nn.softmax((inputs + gumbel_noise) / self.temperature, axis=1), axis=1)
+        
+        self.update_temperature()
+        return outputs
+    
+    def update_temperature(self):
+        new_temperature = tf.maximum(self.temperature * self.anneal_factor, self.min_temperature)
+        self.temperature.assign(new_temperature)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update(
+            {
+                "initial_temperature": self.initial_temperature,
+                "anneal_factor": self.anneal_factor,
+                "min_temperature": self.min_temperature
+            }
+        )
+        return config
+
+
 class VectorQuantizer(tf.keras.layers.Layer):
     """
     Args:
@@ -18,6 +61,9 @@ class VectorQuantizer(tf.keras.layers.Layer):
             epsilon=1e-12,
             commitment_cost=1.0,
             threshold_ema_dead_code=2,
+            sample_codebook_temperature=0,
+            anneal_factor=0.999995,
+            min_temperature=0.5,
             **kwargs):
         super().__init__(**kwargs)
         self.embedding_dim = embedding_dim
@@ -27,6 +73,11 @@ class VectorQuantizer(tf.keras.layers.Layer):
         self.epsilon = epsilon
         self.commitment_cost = commitment_cost
         self.threshold_ema_dead_code = threshold_ema_dead_code
+
+        self.gumbel_softmax = GumbelSoftmaxLayer(
+            initial_temperature=sample_codebook_temperature,
+            anneal_factor=anneal_factor,
+            min_temperature=min_temperature)
 
     def build(self, input_shape):
         self.embeddings = self.add_weight(
@@ -107,7 +158,7 @@ class VectorQuantizer(tf.keras.layers.Layer):
             tf.reduce_sum(flat_inputs ** 2, axis=1, keepdims=True) - 2 * similarity + tf.reduce_sum(self.embeddings ** 2, axis=0, keepdims=True)
         )
 
-        encoding_indices = tf.argmax(-distances, axis=1)
+        encoding_indices = self.gumbel_softmax(-distances, training=training)
         return encoding_indices
 
     def get_config(self):
@@ -134,6 +185,9 @@ class ResidualVQ(tf.keras.layers.Layer):
             ema_decay=0.99,
             threshold_ema_dead_code=2,
             commitment_cost=1.0,
+            sample_codebook_temperature=0,
+            anneal_factor=0.999995,
+            min_temperature=0.5,
             **kwargs):
         super().__init__(**kwargs)
         self.codebook_size = codebook_size
@@ -147,7 +201,10 @@ class ResidualVQ(tf.keras.layers.Layer):
                 batch_size=batch_size,
                 ema_decay=ema_decay,
                 threshold_ema_dead_code=threshold_ema_dead_code,
-                commitment_cost=commitment_cost)
+                commitment_cost=commitment_cost,
+                sample_codebook_temperature=sample_codebook_temperature,
+                anneal_factor=anneal_factor,
+                min_temperature=min_temperature)
             for i in range(num_quantizers)]
 
     def call(self, inputs, training=False):
