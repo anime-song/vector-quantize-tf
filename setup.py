@@ -7,7 +7,7 @@ setup(
     author="anime-song",
     description="tensorflowでの残差ベクトル量子化の実装",
     license="MIT license",
-    version="0.0.3",
-    install_requires=["tensorflow"],
+    version="0.0.4",
+    install_requires=["tensorflow", "scikit-learn"],
     packages=["vector_quantize_tf"]
 )
