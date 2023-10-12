@@ -297,9 +297,6 @@ class ResidualVQ(tf.keras.layers.Layer):
             embedding_dim,
             dtype=tf.float32) if input_dim != embedding_dim else tf.keras.layers.Identity(
             dtype=tf.float32)
-        self.projection_norm = tf.keras.layers.LayerNormalization(
-            dtype=tf.float32) if input_dim != embedding_dim else tf.keras.layers.Identity(
-            dtype=tf.float32)
         self.projection_out = tf.keras.layers.Dense(
             input_dim,
             dtype=tf.float32) if input_dim != embedding_dim else tf.keras.layers.Identity(
@@ -310,7 +307,6 @@ class ResidualVQ(tf.keras.layers.Layer):
 
     def call(self, inputs, training=False):
         inputs = self.projection_in(inputs)
-        inputs = self.projection_norm(inputs)
 
         residual = inputs
         quantized_out = 0.
