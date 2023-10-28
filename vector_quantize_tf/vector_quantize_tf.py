@@ -8,6 +8,7 @@ class GumbelSoftmaxLayer(tf.keras.layers.Layer):
             initial_temperature=2.0,
             anneal_factor=0.999995,
             min_temperature=0.5,
+            layer_index=0,
             **kwargs):
         super(GumbelSoftmaxLayer, self).__init__(**kwargs)
         self.initial_temperature = initial_temperature
@@ -15,12 +16,11 @@ class GumbelSoftmaxLayer(tf.keras.layers.Layer):
         self.anneal_factor = anneal_factor
         self.min_temperature = min_temperature
 
-    def build(self, input_shape):
         self.temperature = tf.Variable(
             self.initial_temperature,
             dtype=tf.float32,
             trainable=False,
-            name="temperature")
+            name="temperature_{}".format(layer_index))
 
     def call(self, inputs, training=False):
         if not self.use_temperature or not training:
@@ -82,6 +82,7 @@ class VectorQuantizer(tf.keras.layers.Layer):
             threshold_ema_dead_code=2.0,
             sample_codebook_temperature=0.0,
             kmeans_init=False,
+            layer_index=0,
             **kwargs):
         super().__init__(**kwargs)
         self.embedding_dim = embedding_dim
@@ -92,26 +93,28 @@ class VectorQuantizer(tf.keras.layers.Layer):
         self.commitment_cost = commitment_cost
         self.threshold_ema_dead_code = threshold_ema_dead_code
         self.kmeans_init = kmeans_init
+        self.layer_index = layer_index
 
         self.gumbel_softmax = GumbelSoftmaxLayer(
             initial_temperature=sample_codebook_temperature,
+            layer_index=layer_index,
             dtype=tf.float32)
 
     def build(self, input_shape):
         self.embeddings = self.add_weight(
-            name="embeddings",
+            name="embeddings_{}".format(self.layer_index),
             shape=(self.embedding_dim, self.codebook_size),
             dtype=tf.float32,
             initializer=tf.keras.initializers.random_normal(),
             trainable=False)
         self.ema_cluster_size = self.add_weight(
-            name="ema_cluster_size",
+            name="ema_cluster_size_{}".format(self.layer_index),
             shape=(self.codebook_size,),
             dtype=tf.float32,
             initializer='zeros',
             trainable=False)
         self.ema_w = self.add_weight(
-            name="ema_w",
+            name="ema_w_{}".format(self.layer_index),
             shape=(self.embedding_dim, self.codebook_size),
             dtype=tf.float32,
             initializer=tf.initializers.Constant(self.embeddings.numpy()),
@@ -121,7 +124,7 @@ class VectorQuantizer(tf.keras.layers.Layer):
             False,
             dtype=tf.bool,
             trainable=False,
-            name="initialized")
+            name="initialized_{}".format(self.layer_index))
 
     def init_embeddings(self, inputs):
         if self.initialized:
@@ -290,8 +293,9 @@ class ResidualVQ(tf.keras.layers.Layer):
                 commitment_cost=commitment_cost,
                 sample_codebook_temperature=sample_codebook_temperature,
                 kmeans_init=kmeans_init,
+                layer_index=i,
                 dtype=tf.float32)
-            for _ in range(num_quantizers)]
+            for i in range(num_quantizers)]
 
         self.projection_in = tf.keras.layers.Dense(
             embedding_dim,
@@ -304,6 +308,21 @@ class ResidualVQ(tf.keras.layers.Layer):
 
     def get_embeddings(self):
         return [layer.embeddings for layer in self.vq_layers]
+    
+    def decode(self, encoding_indices):
+        embeddings = self.get_embeddings()
+
+        quantized_out = 0.0
+        for embed, indices in zip(embeddings, encoding_indices):
+            quantized = tf.nn.embedding_lookup(
+                tf.transpose(embed, [1, 0]),
+                indices)
+
+            quantized_out += quantized
+
+        quantized_out = self.projection_out(quantized_out)
+
+        return quantized_out
 
     def call(self, inputs, training=False):
         inputs = self.projection_in(inputs)
@@ -312,6 +331,7 @@ class ResidualVQ(tf.keras.layers.Layer):
         quantized_out = 0.
 
         losses = []
+        all_quantized = []
         encoding_indices = []
         for layer in self.vq_layers:
             vq_output = layer(residual, training=training)
@@ -320,6 +340,7 @@ class ResidualVQ(tf.keras.layers.Layer):
             quantized_out = quantized_out + vq_output['quantized']
 
             losses.append(vq_output['loss'])
+            all_quantized.append(vq_output['quantized'])
             encoding_indices.append(vq_output['encoding_indices'])
 
         if self.commitment_cost != 0:
@@ -330,7 +351,7 @@ class ResidualVQ(tf.keras.layers.Layer):
 
         quantized_out = self.projection_out(quantized_out)
 
-        return quantized_out, encoding_indices
+        return quantized_out, all_quantized, encoding_indices
 
     def get_config(self):
         config = super().get_config()
