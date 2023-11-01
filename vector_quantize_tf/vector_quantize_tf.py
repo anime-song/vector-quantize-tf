@@ -194,7 +194,7 @@ class VectorQuantizer(tf.keras.layers.Layer):
             tf.transpose(self.embeddings, [1, 0]),
             encoding_indices)
 
-        if training:
+        if training and self.trainable:
             cluster_size = tf.reduce_sum(encodings, 0)
             updated_ema_cluster_size = tf.keras.backend.moving_average_update(
                 self.ema_cluster_size, cluster_size, self.ema_decay)
