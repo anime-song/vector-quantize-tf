@@ -368,7 +368,7 @@ class ResidualVQ(tf.keras.layers.Layer):
                     break
             
             vq_output = layer(residual, training=training)
-            residual = residual - vq_output['quantized']
+            residual = residual - tf.stop_gradient(vq_output['quantized'])
             quantized_out = quantized_out + vq_output['quantized']
 
             losses.append(vq_output['loss'])
