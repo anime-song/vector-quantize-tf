@@ -1,6 +1,35 @@
 import tensorflow as tf
 from sklearn.cluster import KMeans
 
+class RMSNorm(tf.keras.layers.Layer):
+    def __init__(self, axis=-1, epsilon=1e-5, **kwargs):
+        super().__init__(**kwargs)
+        self.axis = axis
+        self.epsilon = epsilon
+    
+    def build(self, input_shape):
+        self.new_std = self.add_weight(
+            name='new_std',
+            shape=[input_shape[self.axis], ],
+            initializer=tf.constant_initializer(1),
+            trainable=True,
+            experimental_autocast=False
+        )
+
+    def call(self, x):
+        x = tf.cast(x, self.new_std.dtype)
+        ms = tf.reduce_mean(tf.square(x), axis=-1, keepdims=True)
+        norm_inputs = x * tf.math.rsqrt(ms + self.epsilon)
+        return norm_inputs * self.new_std
+    
+    def get_config(self):
+        config = {
+            'axis': self.axis,
+            "epsilon": self.epsilon
+        }
+        base_config = super(RMSNorm, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+    
 
 class Identity(tf.keras.layers.Layer):
     def call(self, inputs):
@@ -99,6 +128,7 @@ class VectorQuantizer(tf.keras.layers.Layer):
         self.threshold_ema_dead_code = threshold_ema_dead_code
         self.kmeans_init = kmeans_init
         self.use_ema = use_ema
+        self.use_l2norm = not use_ema
         self.layer_index = layer_index
 
         self.gumbel_softmax = GumbelSoftmaxLayer(
@@ -109,6 +139,8 @@ class VectorQuantizer(tf.keras.layers.Layer):
         self.projection_in = tf.keras.layers.Dense(
             embedding_dim,
             dtype=tf.float32) if input_dim != embedding_dim else Identity(
+            dtype=tf.float32)
+        self.in_norm = RMSNorm(dtype=tf.float32) if input_dim != embedding_dim and self.use_l2norm else Identity(
             dtype=tf.float32)
         self.projection_out = tf.keras.layers.Dense(
             input_dim,
@@ -121,7 +153,7 @@ class VectorQuantizer(tf.keras.layers.Layer):
             shape=(self.embedding_dim, self.codebook_size),
             dtype=tf.float32,
             initializer=tf.keras.initializers.random_normal(),
-            trainable=not self.use_ema)
+            trainable=self.use_l2norm)
         self.ema_cluster_size = self.add_weight(
             name="ema_cluster_size_{}".format(self.layer_index),
             shape=(self.codebook_size,),
@@ -165,6 +197,14 @@ class VectorQuantizer(tf.keras.layers.Layer):
         self.ema_cluster_size.assign(cluster_size)
         self.initialized.assign(True)
 
+    def decode(self, encoding_indices):
+        quantized = tf.nn.embedding_lookup(
+            tf.transpose(self.embeddings, [1, 0]),
+            encoding_indices)
+
+        quantized = self.projection_out(quantized)
+        return quantized
+
     def expire_codes(self, batch_samples):
         if self.threshold_ema_dead_code <= 0.0:
             return
@@ -198,6 +238,10 @@ class VectorQuantizer(tf.keras.layers.Layer):
 
     def call(self, inputs, training=False):
         inputs = self.projection_in(inputs)
+        inputs = self.in_norm(inputs)
+
+        if self.use_l2norm:
+            inputs = tf.math.l2_normalize(inputs, axis=-1)
 
         flat_inputs = tf.reshape(inputs, [-1, self.embedding_dim])
 
@@ -236,9 +280,9 @@ class VectorQuantizer(tf.keras.layers.Layer):
             tf.square(tf.stop_gradient(quantized) - inputs))
         
         loss = commitment_loss * self.commitment_loss_weight
-        if not self.use_ema:
+        if self.use_l2norm:
             codebook_loss = tf.reduce_mean(
-                tf.square(tf.stop_gradient(inputs) - quantized)
+                tf.square(quantized - tf.stop_gradient(inputs))
             )
             loss += codebook_loss
         
@@ -256,8 +300,7 @@ class VectorQuantizer(tf.keras.layers.Layer):
 
     def get_code_indices(self, flat_inputs, training=False):
         embeddings = self.embeddings
-        if not self.use_ema:
-            flat_inputs = tf.math.l2_normalize(flat_inputs, axis=1)
+        if self.use_l2norm:
             embeddings = tf.math.l2_normalize(embeddings, axis=0)
 
         similarity = tf.matmul(flat_inputs, embeddings)
@@ -343,11 +386,7 @@ class ResidualVQ(tf.keras.layers.Layer):
             vq_layer = self.vq_layers[i]
             indices = tf.cast(encoding_indices[i], dtype=tf.int32)
 
-            embed = vq_layer.embeddings
-            quantized = tf.nn.embedding_lookup(
-                tf.transpose(embed, [1, 0]),
-                indices)
-            quantized = vq_layer.projection_out(quantized)
+            quantized = vq_layer.decode(indices)
 
             all_quantized.append(quantized)
             quantized_out += quantized
@@ -368,7 +407,7 @@ class ResidualVQ(tf.keras.layers.Layer):
                     break
             
             vq_output = layer(residual, training=training)
-            residual = residual - tf.stop_gradient(vq_output['quantized'])
+            residual = residual - vq_output['quantized']
             quantized_out = quantized_out + vq_output['quantized']
 
             losses.append(vq_output['loss'])
