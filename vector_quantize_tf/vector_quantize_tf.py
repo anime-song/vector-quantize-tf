@@ -140,8 +140,6 @@ class VectorQuantizer(tf.keras.layers.Layer):
             embedding_dim,
             dtype=tf.float32) if input_dim != embedding_dim else Identity(
             dtype=tf.float32)
-        self.in_norm = RMSNorm(dtype=tf.float32) if input_dim != embedding_dim and self.use_l2norm else Identity(
-            dtype=tf.float32)
         self.projection_out = tf.keras.layers.Dense(
             input_dim,
             dtype=tf.float32) if input_dim != embedding_dim else Identity(
@@ -238,11 +236,6 @@ class VectorQuantizer(tf.keras.layers.Layer):
 
     def call(self, inputs, training=False):
         inputs = self.projection_in(inputs)
-        inputs = self.in_norm(inputs)
-
-        if self.use_l2norm:
-            inputs = tf.math.l2_normalize(inputs, axis=-1)
-
         flat_inputs = tf.reshape(inputs, [-1, self.embedding_dim])
 
         if self.kmeans_init:
@@ -301,6 +294,7 @@ class VectorQuantizer(tf.keras.layers.Layer):
     def get_code_indices(self, flat_inputs, training=False):
         embeddings = self.embeddings
         if self.use_l2norm:
+            flat_inputs = tf.math.l2_normalize(flat_inputs, axis=-1)
             embeddings = tf.math.l2_normalize(embeddings, axis=0)
 
         similarity = tf.matmul(flat_inputs, embeddings)

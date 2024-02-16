@@ -45,3 +45,22 @@ residual_vq = ResidualVQ(
 inputs = tf.random.uniform([2, 10, 252])
 quantized, indices = residual_vq(inputs)
 ```
+
+
+use_ema=Falseの場合、l2normを使用します。注意事項として学習初期のロスが非常に大きくなる場合があります。
+```py
+from vector_quantize_tf import ResidualVQ
+
+residual_vq = ResidualVQ(
+    input_dim=252, # このレイヤーに入力するテンソルの特徴次元
+    codebook_size=1024,
+    embedding_dim=32,
+    num_quantizers=8,
+    ema_decay=0.99,
+    threshold_ema_dead_code=2,
+    kmeans_init=True,
+    use_ema=False
+)
+inputs = tf.random.uniform([2, 10, 252])
+quantized, indices = residual_vq(inputs)
+```
